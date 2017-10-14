@@ -9,14 +9,6 @@ import org.apache.spark.sql.Dataset
 
 
 trait BinomialLogisticRegressionParams extends Params {
-  final val featuresCol = new Param[String](this, "featuresCol", "Param for features column name.")
-  final val labelCol = new Param[String](this, "labelCol", "Param for label column name.")
-
-  def getFeaturesCol() = featuresCol
-  def setFeaturesCol(value: String) = set(featuresCol, value)
-
-  def getLabelCol() = labelCol
-  def setLabelCol(value: String) = set(labelCol, value)
 }
 
 class BinomialLogisticRegression(override val uid: String)
@@ -38,8 +30,7 @@ class BinomialLogisticRegressionModel(
   val coefficients: Matrix,
   val intercepts: Vector
 ) extends ProbabilisticClassificationModel[Vector, BinomialLogisticRegressionModel] with BinomialLogisticRegressionParams {
-
-  def this() = this(Identifiable.randomUID("logisticregressionmodel"))
+  
 
   override protected def predictRaw(features: Vector): Vector = ???
 
@@ -47,8 +38,8 @@ class BinomialLogisticRegressionModel(
 
   override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector = rawPrediction match {
     case dv: DenseVector => {
-      for (i <- 0 until dv.size) {
-        dv(i) = 1.0 / (1.0 + math.exp(-dv(i)))
+      for (i <- 0 until dv.values.size) {
+        dv.values(i) = 1.0 / (1.0 + math.exp(-dv.values(i)))
       }
       dv
     }
