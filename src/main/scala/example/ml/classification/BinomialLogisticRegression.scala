@@ -32,7 +32,8 @@ class BinomialLogisticRegressionModel(
 ) extends ProbabilisticClassificationModel[Vector, BinomialLogisticRegressionModel] with BinomialLogisticRegressionParams {
   
 
-  override protected def predictRaw(features: Vector): Vector = ???
+  override protected def predictRaw(features: Vector): Vector = Vectors.dense(
+    coefficients.multiply(features).toArray.zip(intercepts.toArray).map { case(x, y) => x + y })
 
   override def copy(extra: ParamMap): BinomialLogisticRegressionModel = defaultCopy(extra)
 
