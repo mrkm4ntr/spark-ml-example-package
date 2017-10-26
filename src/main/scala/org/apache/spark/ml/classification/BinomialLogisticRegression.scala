@@ -1,12 +1,15 @@
 package org.apache.spark.ml.classification
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS}
 import breeze.linalg.{DenseVector => BDV}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasTol}
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, Row}
+
+import scala.collection.mutable
 
 trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth
@@ -21,10 +24,16 @@ class BinomialLogisticRegression(val uid: String) extends ProbabilisticClassifie
     }
     val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
     val costFun = new CostFun(points, $(aggregationDepth))
-    // TODO
-    val init = Vectors.zeros(10)
+    val init = Vectors.zeros(points.first().features.size + 1)
     val states = optimizer.iterations(new CachedDiffFunction[BDV[Double]](costFun), new BDV(init.toArray))
-    new BinomialLogisticRegressionModel(uid, Vectors.zeros(10), 0.0)
+    val arrayBuilder = mutable.ArrayBuilder.make[Double]
+    var state: optimizer.State = null
+    while (states.hasNext) {
+      state = states.next()
+      arrayBuilder += state.adjustedValue
+    }
+    val allCoefficients = state.x.toArray.clone
+    new BinomialLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last)
   }
 }
 
@@ -36,28 +45,29 @@ class CostFun(
 ) extends DiffFunction[BDV[Double]] {
 
   override def calculate(coefficients: BDV[Double]): (Double, BDV[Double]) = {
-    val coeffs = Vectors.fromBreeze(coefficients)
+    val bcCoefficients = points.context.broadcast(Vectors.fromBreeze(coefficients))
     val logisticAggregator = {
       val seqOp = (c: BinomialLogisticAggregator, point: Point) => c.add(point)
       val combOp = (c1: BinomialLogisticAggregator, c2: BinomialLogisticAggregator) => c1.merge(c2)
-      points.treeAggregate(new BinomialLogisticAggregator(coeffs))(seqOp, combOp, aggregationDepth)
+      points.treeAggregate(new BinomialLogisticAggregator(bcCoefficients))(seqOp, combOp, aggregationDepth)
     }
     val totalGradientVector = logisticAggregator.gradient
+    bcCoefficients.destroy(blocking = false)
     (logisticAggregator.loss, new BDV(totalGradientVector.toArray))
   }
 }
 
 class BinomialLogisticAggregator(
-  coefficients: Vector
+  bcCoefficients: Broadcast[Vector]
 ) extends Serializable {
   private var weightSum = 0.0
   private var lossSum = 0.0
 
   @transient
-  private lazy val coefficientsArray = coefficients.toArray
+  private lazy val coefficientsArray = bcCoefficients.value.toArray
 
 
-  private lazy val gradientSumArray = new Array[Double](coefficients.size)
+  private lazy val gradientSumArray = new Array[Double](bcCoefficients.value.size)
 
   private def binaryUpdateInPlace(features: Vector, label: Double): Unit = {
     val localCoefficients = coefficientsArray
@@ -94,7 +104,16 @@ class BinomialLogisticAggregator(
       this
   }
 
-  def merge(other: BinomialLogisticAggregator) = ???
+  def merge(other: BinomialLogisticAggregator): this.type = {
+    if (other.weightSum != 0) {
+      weightSum += other.weightSum
+      lossSum += lossSum
+    }
+    other.gradientSumArray.zipWithIndex.foreach { case (v, i) =>
+      this.gradientSumArray(i) += v
+    }
+    this
+  }
 
 
   def loss: Double = lossSum / weightSum
