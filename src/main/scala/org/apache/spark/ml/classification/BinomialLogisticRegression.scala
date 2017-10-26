@@ -116,7 +116,7 @@ class BinomialLogisticAggregator(
   def merge(other: BinomialLogisticAggregator): this.type = {
     if (other.weightSum != 0) {
       weightSum += other.weightSum
-      lossSum += lossSum
+      lossSum += other.lossSum
     }
     other.gradientSumArray.zipWithIndex.foreach { case (v, i) =>
       this.gradientSumArray(i) += v
