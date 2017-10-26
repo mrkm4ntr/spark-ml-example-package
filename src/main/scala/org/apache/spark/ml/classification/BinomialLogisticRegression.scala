@@ -12,9 +12,19 @@ import org.apache.spark.sql.{Dataset, Row}
 import scala.collection.mutable
 
 trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
-  with HasMaxIter with HasTol with HasAggregationDepth
+  with HasMaxIter with HasTol with HasAggregationDepth {
 
-class BinomialLogisticRegression(val uid: String) extends ProbabilisticClassifier[Vector, BinomialLogisticRegression, BinomialLogisticRegressionModel]
+  def setMaxIter(value: Int): this.type = set(maxIter, value)
+  setDefault(maxIter -> 10)
+
+  def setTol(value: Double): this.type = set(tol, value)
+  setDefault(tol -> 1E-6)
+
+  def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
+  setDefault(aggregationDepth -> 2)
+}
+
+class BinomialLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinomialLogisticRegression, BinomialLogisticRegressionModel]
   with BinomialLogisticRegressionParams {
   override def copy(extra: ParamMap): BinomialLogisticRegression = defaultCopy(extra)
 
@@ -23,9 +33,9 @@ class BinomialLogisticRegression(val uid: String) extends ProbabilisticClassifie
       case Row(label: Double, features: Vector) => Point(label, features)
     }
     val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
-    val costFun = new CostFun(points, $(aggregationDepth))
+    val costFun = new BinomialLogisticCostFun(points, $(aggregationDepth))
     val init = Vectors.zeros(points.first().features.size + 1)
-    val states = optimizer.iterations(new CachedDiffFunction[BDV[Double]](costFun), new BDV(init.toArray))
+    val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
     var state: optimizer.State = null
     while (states.hasNext) {
@@ -39,7 +49,7 @@ class BinomialLogisticRegression(val uid: String) extends ProbabilisticClassifie
 
 case class Point(label: Double, features: Vector)
 
-class CostFun(
+class BinomialLogisticCostFun(
   points: RDD[Point],
   aggregationDepth: Int
 ) extends DiffFunction[BDV[Double]] {
@@ -66,12 +76,11 @@ class BinomialLogisticAggregator(
   @transient
   private lazy val coefficientsArray = bcCoefficients.value.toArray
 
-
   private lazy val gradientSumArray = new Array[Double](bcCoefficients.value.size)
 
   private def binaryUpdateInPlace(features: Vector, label: Double): Unit = {
     val localCoefficients = coefficientsArray
-    val localGradientArary = gradientSumArray
+    val localGradientArray = gradientSumArray
     val margin = - {
       var sum = 0.0
       features.foreachActive { (index, value) =>
@@ -85,10 +94,10 @@ class BinomialLogisticAggregator(
     val multiplier = 1.0 / (1.0 + math.exp(margin) - label)
 
     features.foreachActive { (index, value) =>
-      localGradientArary(index) += multiplier * value
+      localGradientArray(index) += multiplier * value
     }
     // Intercept
-    localGradientArary(features.size) += multiplier
+    localGradientArray(features.size) += multiplier
 
     if (label > 0) {
       lossSum += MLUtils.log1pExp(margin)
@@ -115,7 +124,6 @@ class BinomialLogisticAggregator(
     this
   }
 
-
   def loss: Double = lossSum / weightSum
 
   def gradient: Vector = {
@@ -126,7 +134,7 @@ class BinomialLogisticAggregator(
 }
 
 class BinomialLogisticRegressionModel(
-  val uid: String,
+  override val uid: String,
   val coefficients: Vector,
   val intercept: Double
 ) extends ProbabilisticClassificationModel[Vector, BinomialLogisticRegressionModel]
