@@ -91,7 +91,7 @@ class BinomialLogisticAggregator(
       sum
     }
 
-    val multiplier = 1.0 / (1.0 + math.exp(margin) - label)
+    val multiplier = 1.0 / (1.0 + math.exp(margin)) - label
 
     features.foreachActive { (index, value) =>
       localGradientArray(index) += multiplier * value
