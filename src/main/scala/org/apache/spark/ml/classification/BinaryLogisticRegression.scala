@@ -11,7 +11,7 @@ import org.apache.spark.sql.{Dataset, Row}
 
 import scala.collection.mutable
 
-trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
+trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
@@ -27,16 +27,16 @@ trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
   setDefault(threshold -> 0.5)
 }
 
-class BinomialLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinomialLogisticRegression, BinomialLogisticRegressionModel]
-  with BinomialLogisticRegressionParams {
-  override def copy(extra: ParamMap): BinomialLogisticRegression = defaultCopy(extra)
+class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
+  with BinaryLogisticRegressionParams {
+  override def copy(extra: ParamMap): BinaryLogisticRegression = defaultCopy(extra)
 
-  override protected def train(dataset: Dataset[_]): BinomialLogisticRegressionModel = {
+  override protected def train(dataset: Dataset[_]): BinaryLogisticRegressionModel = {
     val points = dataset.select($(labelCol), $(featuresCol)).rdd.map {
       case Row(label: Double, features: Vector) => Point(label, features)
     }
     val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
-    val costFun = new BinomialLogisticCostFun(points, $(aggregationDepth))
+    val costFun = new BinaryLogisticCostFun(points, $(aggregationDepth))
     val init = Vectors.zeros(points.first().features.size + 1)
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
@@ -46,13 +46,13 @@ class BinomialLogisticRegression(override val uid: String) extends Probabilistic
       arrayBuilder += state.adjustedValue
     }
     val allCoefficients = state.x.toArray.clone
-    new BinomialLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last)
+    new BinaryLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last)
   }
 }
 
 case class Point(label: Double, features: Vector)
 
-class BinomialLogisticCostFun(
+class BinaryLogisticCostFun(
   points: RDD[Point],
   aggregationDepth: Int
 ) extends DiffFunction[BDV[Double]] {
@@ -60,9 +60,9 @@ class BinomialLogisticCostFun(
   override def calculate(coefficients: BDV[Double]): (Double, BDV[Double]) = {
     val bcCoefficients = points.context.broadcast(Vectors.fromBreeze(coefficients))
     val logisticAggregator = {
-      val seqOp = (c: BinomialLogisticAggregator, point: Point) => c.add(point)
-      val combOp = (c1: BinomialLogisticAggregator, c2: BinomialLogisticAggregator) => c1.merge(c2)
-      points.treeAggregate(new BinomialLogisticAggregator(bcCoefficients))(seqOp, combOp, aggregationDepth)
+      val seqOp = (c: BinaryLogisticAggregator, point: Point) => c.add(point)
+      val combOp = (c1: BinaryLogisticAggregator, c2: BinaryLogisticAggregator) => c1.merge(c2)
+      points.treeAggregate(new BinaryLogisticAggregator(bcCoefficients))(seqOp, combOp, aggregationDepth)
     }
     val totalGradientVector = logisticAggregator.gradient
     bcCoefficients.destroy(blocking = false)
@@ -70,7 +70,7 @@ class BinomialLogisticCostFun(
   }
 }
 
-class BinomialLogisticAggregator(
+class BinaryLogisticAggregator(
   bcCoefficients: Broadcast[Vector]
 ) extends Serializable {
   private var weightSum = 0.0
@@ -116,7 +116,7 @@ class BinomialLogisticAggregator(
       this
   }
 
-  def merge(other: BinomialLogisticAggregator): this.type = {
+  def merge(other: BinaryLogisticAggregator): this.type = {
     if (other.weightSum != 0) {
       weightSum += other.weightSum
       lossSum += other.lossSum
@@ -136,12 +136,12 @@ class BinomialLogisticAggregator(
   }
 }
 
-class BinomialLogisticRegressionModel(
+class BinaryLogisticRegressionModel(
   override val uid: String,
   val coefficients: Vector,
   val intercept: Double
-) extends ProbabilisticClassificationModel[Vector, BinomialLogisticRegressionModel]
-  with BinomialLogisticRegressionParams {
+) extends ProbabilisticClassificationModel[Vector, BinaryLogisticRegressionModel]
+  with BinaryLogisticRegressionParams {
   override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector =
     Vectors.dense(rawPrediction.asInstanceOf[DenseVector].values.map(p => 1.0 / (1.0 + math.exp(-p))))
 
@@ -149,11 +149,27 @@ class BinomialLogisticRegressionModel(
 
   override protected def predictRaw(features: Vector): Vector = Vectors.dense(Array(BLAS.dot(features, coefficients) + intercept))
 
-  override def copy(extra: ParamMap): BinomialLogisticRegressionModel = defaultCopy(extra)
+  override def copy(extra: ParamMap): BinaryLogisticRegressionModel = defaultCopy(extra)
 
   override protected def probability2prediction(probability: Vector): Double =
     if (probability(0) > $(threshold)) 1 else 0
 
   protected override def raw2prediction(rawPrediction: Vector): Double =
     probability2prediction(raw2probability(rawPrediction))
+
+  def findSummaryModelAndProbabilityCol():
+  (BinaryLogisticRegressionModel, String) = {
+    $(probabilityCol) match {
+      case "" =>
+        val probabilityColName = "probability_" + java.util.UUID.randomUUID.toString
+        (copy(ParamMap.empty).setProbabilityCol(probabilityColName), probabilityColName)
+      case p => (this, p)
+    }
+  }
+
+  def evaluate(dataset: Dataset[_]): LogisticRegressionSummary = {
+    val (summaryModel, probabilityColName) = findSummaryModelAndProbabilityCol()
+    new BinaryLogisticRegressionSummary(summaryModel.transform(dataset),
+      probabilityColName, $(labelCol), $(featuresCol))
+  }
 }
