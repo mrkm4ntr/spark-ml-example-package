@@ -4,7 +4,7 @@ import breeze.linalg.{DenseVector => BDV}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
-import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasTol}
+import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasThreshold, HasTol}
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, Row}
@@ -12,7 +12,7 @@ import org.apache.spark.sql.{Dataset, Row}
 import scala.collection.mutable
 
 trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
-  with HasMaxIter with HasTol with HasAggregationDepth {
+  with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -22,6 +22,9 @@ trait BinomialLogisticRegressionParams extends ProbabilisticClassifierParams
 
   def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
   setDefault(aggregationDepth -> 2)
+
+  def setThreshold(value: Double): this.type  = set(threshold, value)
+  setDefault(threshold -> 0.5)
 }
 
 class BinomialLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinomialLogisticRegression, BinomialLogisticRegressionModel]
@@ -140,11 +143,17 @@ class BinomialLogisticRegressionModel(
 ) extends ProbabilisticClassificationModel[Vector, BinomialLogisticRegressionModel]
   with BinomialLogisticRegressionParams {
   override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector =
-    Vectors.dense(rawPrediction.asInstanceOf[DenseVector].values.map(p => 1 / (1 + math.exp(-p))))
+    Vectors.dense(rawPrediction.asInstanceOf[DenseVector].values.map(p => 1.0 / (1.0 + math.exp(-p))))
 
   override def numClasses: Int = 2
 
   override protected def predictRaw(features: Vector): Vector = Vectors.dense(Array(BLAS.dot(features, coefficients) + intercept))
 
   override def copy(extra: ParamMap): BinomialLogisticRegressionModel = defaultCopy(extra)
+
+  override protected def probability2prediction(probability: Vector): Double =
+    if (probability(0) > $(threshold)) 1 else 0
+
+  protected override def raw2prediction(rawPrediction: Vector): Double =
+    probability2prediction(raw2probability(rawPrediction))
 }
