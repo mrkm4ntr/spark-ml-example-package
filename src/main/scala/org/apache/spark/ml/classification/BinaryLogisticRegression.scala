@@ -1,10 +1,10 @@
 package org.apache.spark.ml.classification
-import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS}
+import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
-import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasThreshold, HasTol}
+import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.util.MLUtils
@@ -16,7 +16,8 @@ import org.apache.spark.sql.types.DoubleType
 import scala.collection.mutable
 
 trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
-  with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold {
+  with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
+  with HasRegParam with HasElasticNetParam {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -27,8 +28,14 @@ trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
   def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
   setDefault(aggregationDepth -> 2)
 
-  def setThreshold(value: Double): this.type  = set(threshold, value)
+  def setThreshold(value: Double): this.type = set(threshold, value)
   setDefault(threshold -> 0.5)
+
+  def setRegParam(value: Double): this.type = set(regParam, value)
+  setDefault(regParam -> 0.0)
+
+  def setElasticNetParam(value: Double): this.type = set(elasticNetParam, value)
+  setDefault(elasticNetParam -> 0.0)
 }
 
 class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
@@ -42,9 +49,28 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
     val points = dataset.select($(labelCol), $(featuresCol)).rdd.map {
       case Row(label: Double, features: Vector) => Point(label, features)
     }
-    val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
-    val costFun = new BinaryLogisticCostFun(points, $(aggregationDepth))
-    val init = Vectors.zeros(points.first().features.size + 1)
+
+    val numOfCoefficients = points.first().features.size + 1
+
+    val regParamL1 = $(elasticNetParam) * $(regParam)
+    val regParamL2 = (1.0 - $(elasticNetParam)) * $(regParam)
+
+    val optimizer = if (regParamL1 == 0.0) {
+      new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
+    } else {
+      def regParamL1Fun = (index: Int) => {
+        val isIntercept = index == numOfCoefficients - 1
+        if (isIntercept) {
+          0.0
+        } else {
+          regParamL1
+        }
+      }
+      new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
+    }
+
+    val costFun = new BinaryLogisticCostFun(points, regParamL2, $(aggregationDepth))
+    val init = Vectors.zeros(numOfCoefficients)
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
     var state: optimizer.State = null
@@ -59,8 +85,29 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
 
 case class Point(label: Double, features: Vector)
 
+class BinaryClassSummarizer extends Serializable {
+  private val distinctMap = new mutable.HashMap[Int, Long]
+
+  def add(label: Double): this.type = {
+    val counts = distinctMap.getOrElse(label.toInt, 0L)
+    distinctMap.put(label.toInt, counts + 1L)
+    this
+  }
+
+  def merge(other: BinaryClassSummarizer): BinaryClassSummarizer = {
+    val (largeMap, smallMap) = if (this.distinctMap.size > other.distinctMap.size) {
+      (this, other)
+    } else {
+      (other, this)
+    }
+    largeMap.distinctMap ++= smallMap.distinctMap
+    largeMap
+  }
+}
+
 class BinaryLogisticCostFun(
   points: RDD[Point],
+  regParamL2: Double,
   aggregationDepth: Int
 ) extends DiffFunction[BDV[Double]] {
 
@@ -71,9 +118,21 @@ class BinaryLogisticCostFun(
       val combOp = (c1: BinaryLogisticAggregator, c2: BinaryLogisticAggregator) => c1.merge(c2)
       points.treeAggregate(new BinaryLogisticAggregator(bcCoefficients))(seqOp, combOp, aggregationDepth)
     }
-    val totalGradientVector = logisticAggregator.gradient
+
+    val (regVal, totalGradients) = if (regParamL2 == 0.0) {
+      (0.0, logisticAggregator.gradient.toArray)
+    } else {
+      var sum = 0.0
+      val arrayBuffer = mutable.ArrayBuffer[Double]()
+      logisticAggregator.gradient.foreachActive { case (i, v) =>
+        val coefficient = coefficients(i)
+        arrayBuffer += v + regParamL2 * coefficient
+        sum += coefficient * coefficient
+      }
+      (0.5 * regParamL2 * sum, arrayBuffer.toArray)
+    }
     bcCoefficients.destroy(blocking = false)
-    (logisticAggregator.loss, new BDV(totalGradientVector.toArray))
+    (logisticAggregator.loss + regVal, new BDV(totalGradients))
   }
 }
 
