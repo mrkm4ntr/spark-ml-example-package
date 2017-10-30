@@ -1,6 +1,8 @@
 package org.apache.spark.ml.classification
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
+import example.feature.Point
+import example.param.HasBalancedWeight
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
@@ -17,7 +19,7 @@ import scala.collection.mutable
 
 trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
-  with HasRegParam with HasElasticNetParam {
+  with HasRegParam with HasElasticNetParam with HasBalancedWeight {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -36,6 +38,9 @@ trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
 
   def setElasticNetParam(value: Double): this.type = set(elasticNetParam, value)
   setDefault(elasticNetParam -> 0.0)
+
+  def setBalancedWeight(value: Boolean): this.type  = set(balancedWeight, value)
+  setDefault(balancedWeight -> true)
 }
 
 class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
@@ -51,6 +56,13 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
     }
 
     val numOfCoefficients = points.first().features.size + 1
+
+    val weights = if ($(balancedWeight)) {
+      val seqOp = (c: BinaryClassSummarizer, point: Point) => c.add(point.label)
+      val combOp = (c1: BinaryClassSummarizer, c2: BinaryClassSummarizer) => c1.merge(c2)
+      val summarizer = points.treeAggregate(new BinaryClassSummarizer)(seqOp, combOp)
+      summarizer.weights()
+    } else (1.0, 1.0)
 
     val regParamL1 = $(elasticNetParam) * $(regParam)
     val regParamL2 = (1.0 - $(elasticNetParam)) * $(regParam)
@@ -69,7 +81,7 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
       new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
     }
 
-    val costFun = new BinaryLogisticCostFun(points, regParamL2, $(aggregationDepth))
+    val costFun = new BinaryLogisticCostFun(points, weights, regParamL2, $(aggregationDepth))
     val init = Vectors.zeros(numOfCoefficients)
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
@@ -82,8 +94,6 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
     new BinaryLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last)
   }
 }
-
-case class Point(label: Double, features: Vector)
 
 class BinaryClassSummarizer extends Serializable {
   private val distinctMap = new mutable.HashMap[Int, Long]
@@ -103,10 +113,18 @@ class BinaryClassSummarizer extends Serializable {
     largeMap.distinctMap ++= smallMap.distinctMap
     largeMap
   }
+
+  def weights() = {
+    val numOfPos = distinctMap(1)
+    val numOfNeg = distinctMap(0)
+    val total = numOfPos + numOfNeg
+    (total / (2.0 * numOfPos), total / (2.0 * numOfNeg))
+  }
 }
 
 class BinaryLogisticCostFun(
   points: RDD[Point],
+  weights: (Double, Double),
   regParamL2: Double,
   aggregationDepth: Int
 ) extends DiffFunction[BDV[Double]] {
@@ -116,7 +134,7 @@ class BinaryLogisticCostFun(
     val logisticAggregator = {
       val seqOp = (c: BinaryLogisticAggregator, point: Point) => c.add(point)
       val combOp = (c1: BinaryLogisticAggregator, c2: BinaryLogisticAggregator) => c1.merge(c2)
-      points.treeAggregate(new BinaryLogisticAggregator(bcCoefficients))(seqOp, combOp, aggregationDepth)
+      points.treeAggregate(new BinaryLogisticAggregator(bcCoefficients, weights))(seqOp, combOp, aggregationDepth)
     }
 
     val (regVal, totalGradients) = if (regParamL2 == 0.0) {
@@ -137,7 +155,8 @@ class BinaryLogisticCostFun(
 }
 
 class BinaryLogisticAggregator(
-  bcCoefficients: Broadcast[Vector]
+  bcCoefficients: Broadcast[Vector],
+  weights: (Double, Double)
 ) extends Serializable {
   private var weightSum = 0.0
   private var lossSum = 0.0
@@ -147,7 +166,7 @@ class BinaryLogisticAggregator(
 
   private lazy val gradientSumArray = new Array[Double](bcCoefficients.value.size)
 
-  private def binaryUpdateInPlace(features: Vector, label: Double): Unit = {
+  private def binaryUpdateInPlace(features: Vector, weight: Double, label: Double): Unit = {
     val localCoefficients = coefficientsArray
     val localGradientArray = gradientSumArray
     val margin = - {
@@ -160,7 +179,7 @@ class BinaryLogisticAggregator(
       sum
     }
 
-    val multiplier = 1.0 / (1.0 + math.exp(margin)) - label
+    val multiplier = weight * (1.0 / (1.0 + math.exp(margin)) - label)
 
     features.foreachActive { (index, value) =>
       localGradientArray(index) += multiplier * value
@@ -169,16 +188,17 @@ class BinaryLogisticAggregator(
     localGradientArray(features.size) += multiplier
 
     if (label > 0) {
-      lossSum += MLUtils.log1pExp(margin)
+      lossSum += weight * MLUtils.log1pExp(margin)
     } else {
-      lossSum += MLUtils.log1pExp(margin) - margin
+      lossSum += weight * (MLUtils.log1pExp(margin) - margin)
     }
   }
 
   def add(point: Point): this.type = point match {
     case Point(label, features) =>
-      binaryUpdateInPlace(features, label)
-      weightSum += 1
+      val weight = if (label > 0) weights._1 else weights._2
+      binaryUpdateInPlace(features, weight, label)
+      weightSum += weight
       this
   }
 
