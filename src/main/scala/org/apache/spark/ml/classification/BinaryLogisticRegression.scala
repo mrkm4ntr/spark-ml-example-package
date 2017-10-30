@@ -5,9 +5,12 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasThreshold, HasTol}
+import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Dataset, Row}
+import org.apache.spark.sql.{DataFrame, Dataset, Row}
+import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.types.DoubleType
 
 import scala.collection.mutable
 
@@ -167,9 +170,32 @@ class BinaryLogisticRegressionModel(
     }
   }
 
-  def evaluate(dataset: Dataset[_]): LogisticRegressionSummary = {
+  def evaluate(dataset: Dataset[_]): BinaryLogisticRegressionSummary2 = {
     val (summaryModel, probabilityColName) = findSummaryModelAndProbabilityCol()
-    new BinaryLogisticRegressionSummary(summaryModel.transform(dataset),
+    new BinaryLogisticRegressionSummary2(summaryModel.transform(dataset),
       probabilityColName, $(labelCol), $(featuresCol))
   }
+}
+
+trait BinaryClassificationSummary extends Serializable {
+  def predictions: DataFrame
+  def probabilityCol: String
+  def labelCol: String
+  def featuresCol: String
+}
+
+class BinaryLogisticRegressionSummary2(
+  override val predictions: DataFrame,
+  override val probabilityCol: String,
+  override val labelCol: String,
+  override val featuresCol: String
+) extends BinaryClassificationSummary {
+
+  @transient private val binaryMetrics = new BinaryClassificationMetrics(
+    predictions.select(col(probabilityCol), col(labelCol).cast(DoubleType)).rdd.map {
+      case Row(score: Vector, label: Double) => (score(0), label)
+    }, 100
+  )
+
+  lazy val areaUnderROC: Double = binaryMetrics.areaUnderROC()
 }
