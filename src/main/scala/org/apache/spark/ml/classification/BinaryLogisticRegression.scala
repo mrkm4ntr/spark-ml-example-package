@@ -5,6 +5,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared.{HasAggregationDepth, HasMaxIter, HasThreshold, HasTol}
+import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
@@ -32,6 +33,9 @@ trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
 
 class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
   with BinaryLogisticRegressionParams {
+
+  def this() = this(Identifiable.randomUID("binlogreg"))
+
   override def copy(extra: ParamMap): BinaryLogisticRegression = defaultCopy(extra)
 
   override protected def train(dataset: Dataset[_]): BinaryLogisticRegressionModel = {
