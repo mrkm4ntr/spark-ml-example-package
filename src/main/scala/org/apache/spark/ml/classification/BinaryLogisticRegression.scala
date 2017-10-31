@@ -1,18 +1,15 @@
 package org.apache.spark.ml.classification
-import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
+import breeze.optimize.{CachedDiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
 import example.feature.Point
 import example.optim.aggregator.BinaryLogisticAggregator
 import example.optim.loss.RDDLossFunction
 import example.param.HasBalancedWeight
-import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
-import org.apache.spark.mllib.util.MLUtils
-import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.DoubleType
@@ -130,6 +127,7 @@ class BinaryLogisticRegressionModel(
   val intercept: Double
 ) extends ProbabilisticClassificationModel[Vector, BinaryLogisticRegressionModel]
   with BinaryLogisticRegressionParams {
+
   override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector =
     Vectors.dense(rawPrediction.asInstanceOf[DenseVector].values.map(p => 1.0 / (1.0 + math.exp(-p))))
 

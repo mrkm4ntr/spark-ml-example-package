@@ -46,13 +46,11 @@ class BinaryLogisticAggregator(weights: (Double, Double))(bcCoefficients: Broadc
     }
   }
 
-  override def add(point: Point): BinaryLogisticAggregator = {
-    point match {
-      case Point(label, features) =>
-        val weight = if (label > 0) weights._1 else weights._2
-        binaryUpdateInPlace(features, weight, label)
-        weightSum += weight
-        this
-    }
+  override def add(point: Point): BinaryLogisticAggregator = point match {
+    case Point(label, features) =>
+      val weight = if (label > 0) weights._1 else weights._2
+      binaryUpdateInPlace(features, weight, label)
+      weightSum += weight
+      this
   }
 }
