@@ -2,6 +2,8 @@ package org.apache.spark.ml.classification
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
 import example.feature.Point
+import example.optim.aggregator.BinaryLogisticAggregator
+import example.optim.loss.RDDLossFunction
 import example.param.HasBalancedWeight
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.param.ParamMap
@@ -81,7 +83,7 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
       new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
     }
 
-    val costFun = new BinaryLogisticCostFun(points, weights, regParamL2, $(aggregationDepth))
+    val costFun = new RDDLossFunction(points, new BinaryLogisticAggregator(weights)(_), regParamL2, $(aggregationDepth))
     val init = Vectors.zeros(numOfCoefficients)
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
@@ -119,106 +121,6 @@ class BinaryClassSummarizer extends Serializable {
     val numOfNeg = distinctMap(0)
     val total = numOfPos + numOfNeg
     (total / (2.0 * numOfPos), total / (2.0 * numOfNeg))
-  }
-}
-
-class BinaryLogisticCostFun(
-  points: RDD[Point],
-  weights: (Double, Double),
-  regParamL2: Double,
-  aggregationDepth: Int
-) extends DiffFunction[BDV[Double]] {
-
-  override def calculate(coefficients: BDV[Double]): (Double, BDV[Double]) = {
-    val bcCoefficients = points.context.broadcast(Vectors.fromBreeze(coefficients))
-    val logisticAggregator = {
-      val seqOp = (c: BinaryLogisticAggregator, point: Point) => c.add(point)
-      val combOp = (c1: BinaryLogisticAggregator, c2: BinaryLogisticAggregator) => c1.merge(c2)
-      points.treeAggregate(new BinaryLogisticAggregator(bcCoefficients, weights))(seqOp, combOp, aggregationDepth)
-    }
-
-    val (regVal, totalGradients) = if (regParamL2 == 0.0) {
-      (0.0, logisticAggregator.gradient.toArray)
-    } else {
-      var sum = 0.0
-      val arrayBuffer = mutable.ArrayBuffer[Double]()
-      logisticAggregator.gradient.foreachActive { case (i, v) =>
-        val coefficient = coefficients(i)
-        arrayBuffer += v + regParamL2 * coefficient
-        sum += coefficient * coefficient
-      }
-      (0.5 * regParamL2 * sum, arrayBuffer.toArray)
-    }
-    bcCoefficients.destroy(blocking = false)
-    (logisticAggregator.loss + regVal, new BDV(totalGradients))
-  }
-}
-
-class BinaryLogisticAggregator(
-  bcCoefficients: Broadcast[Vector],
-  weights: (Double, Double)
-) extends Serializable {
-  private var weightSum = 0.0
-  private var lossSum = 0.0
-
-  @transient
-  private lazy val coefficientsArray = bcCoefficients.value.toArray
-
-  private lazy val gradientSumArray = new Array[Double](bcCoefficients.value.size)
-
-  private def binaryUpdateInPlace(features: Vector, weight: Double, label: Double): Unit = {
-    val localCoefficients = coefficientsArray
-    val localGradientArray = gradientSumArray
-    val margin = - {
-      var sum = 0.0
-      features.foreachActive { (index, value) =>
-        sum += localCoefficients(index) * value
-      }
-      // Intercept
-      sum += localCoefficients(features.size)
-      sum
-    }
-
-    val multiplier = weight * (1.0 / (1.0 + math.exp(margin)) - label)
-
-    features.foreachActive { (index, value) =>
-      localGradientArray(index) += multiplier * value
-    }
-    // Intercept
-    localGradientArray(features.size) += multiplier
-
-    if (label > 0) {
-      lossSum += weight * MLUtils.log1pExp(margin)
-    } else {
-      lossSum += weight * (MLUtils.log1pExp(margin) - margin)
-    }
-  }
-
-  def add(point: Point): this.type = point match {
-    case Point(label, features) =>
-      val weight = if (label > 0) weights._1 else weights._2
-      binaryUpdateInPlace(features, weight, label)
-      weightSum += weight
-      this
-  }
-
-  def merge(other: BinaryLogisticAggregator): this.type = {
-    if (other.weightSum != 0) {
-      weightSum += other.weightSum
-      lossSum += other.lossSum
-    }
-    other.gradientSumArray.zipWithIndex.foreach { case (v, i) =>
-      this.gradientSumArray(i) += v
-    }
-    this
-  }
-
-  def loss: Double = lossSum / weightSum
-
-  def gradient: Vector = {
-    val result = Vectors.dense(gradientSumArray.clone())
-    BLAS.scal(1.0 / weightSum, result)
-    new DenseVector(result.toArray)
   }
 }
 
