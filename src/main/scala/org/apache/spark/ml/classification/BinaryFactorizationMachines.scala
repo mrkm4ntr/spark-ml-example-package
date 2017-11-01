@@ -60,7 +60,7 @@ class BinaryFactorizationMachines(override val uid: String)
 
     val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
     val costFun = new RDDLossFunction(points, new BinaryFactorizationMachinesAggregator($(k), numOfFeatures)(_), 0.0, $(aggregationDepth))
-    val init = Vectors.zeros(numOfCoefficients)
+    val init = Vectors.dense(Array.fill(numOfCoefficients)(1E-6))
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
     var state: optimizer.State = null
