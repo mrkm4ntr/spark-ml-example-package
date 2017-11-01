@@ -21,7 +21,7 @@ class BinaryLogisticAggregator(weights: (Double, Double))(bcCoefficients: Broadc
         sum += localCoefficients(index) * value
       }
       // Intercept
-      sum += localCoefficients(features.size)
+      sum += localCoefficients(dim - 1)
       sum
     }
 
@@ -31,7 +31,7 @@ class BinaryLogisticAggregator(weights: (Double, Double))(bcCoefficients: Broadc
       localGradientArray(index) += multiplier * value
     }
     // Intercept
-    localGradientArray(features.size) += multiplier
+    localGradientArray(dim - 1) += multiplier
 
     def log1pExp(x: Double) = if (x > 0) {
       x + math.log1p(math.exp(-x))

@@ -143,8 +143,7 @@ class BinaryLogisticRegressionModel(
   protected override def raw2prediction(rawPrediction: Vector): Double =
     probability2prediction(raw2probability(rawPrediction))
 
-  def findSummaryModelAndProbabilityCol():
-  (BinaryLogisticRegressionModel, String) = {
+  def findSummaryModelAndProbabilityCol(): (BinaryLogisticRegressionModel, String) = {
     $(probabilityCol) match {
       case "" =>
         val probabilityColName = "probability_" + java.util.UUID.randomUUID.toString
