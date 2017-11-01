@@ -2,6 +2,7 @@ package org.apache.spark.ml.classification
 
 import breeze.optimize.{CachedDiffFunction, LBFGS}
 import breeze.linalg.{DenseVector => BDV}
+import example.classification.BinaryClassificationSummary
 import example.feature.Point
 import example.optim.aggregator.BinaryFactorizationMachinesAggregator
 import example.optim.loss.RDDLossFunction
@@ -100,6 +101,21 @@ class BinaryFactorizationMachinesModel(
 
   protected override def raw2prediction(rawPrediction: Vector): Double =
     probability2prediction(raw2probability(rawPrediction))
+
+  def findSummaryModelAndProbabilityCol(): (BinaryFactorizationMachinesModel, String) = {
+    $(probabilityCol) match {
+      case "" =>
+        val probabilityColName = "probability_" + java.util.UUID.randomUUID.toString
+        (copy(ParamMap.empty).setProbabilityCol(probabilityColName), probabilityColName)
+      case p => (this, p)
+    }
+  }
+
+  def evaluate(dataset: Dataset[_]): BinaryClassificationSummary = {
+    val (summaryModel, probabilityColName) = findSummaryModelAndProbabilityCol()
+    new BinaryClassificationSummary(summaryModel.transform(dataset),
+      probabilityColName, $(labelCol), $(featuresCol))
+  }
 }
 
 object BinaryFactorizationMachinesModel {

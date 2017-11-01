@@ -1,6 +1,7 @@
 package org.apache.spark.ml.classification
 import breeze.optimize.{CachedDiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
+import example.classification.BinaryClassificationSummary
 import example.feature.Point
 import example.optim.aggregator.BinaryLogisticAggregator
 import example.optim.loss.RDDLossFunction
@@ -9,10 +10,7 @@ import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util.Identifiable
-import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
-import org.apache.spark.sql.{DataFrame, Dataset, Row}
-import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types.DoubleType
+import org.apache.spark.sql.{Dataset, Row}
 
 import scala.collection.mutable
 
@@ -152,32 +150,13 @@ class BinaryLogisticRegressionModel(
     }
   }
 
-  def evaluate(dataset: Dataset[_]): BinaryLogisticRegressionSummary2 = {
+  def evaluate(dataset: Dataset[_]): BinaryClassificationSummary = {
     val (summaryModel, probabilityColName) = findSummaryModelAndProbabilityCol()
-    new BinaryLogisticRegressionSummary2(summaryModel.transform(dataset),
+    new BinaryClassificationSummary(summaryModel.transform(dataset),
       probabilityColName, $(labelCol), $(featuresCol))
   }
 }
 
-trait BinaryClassificationSummary extends Serializable {
-  def predictions: DataFrame
-  def probabilityCol: String
-  def labelCol: String
-  def featuresCol: String
-}
 
-class BinaryLogisticRegressionSummary2(
-  override val predictions: DataFrame,
-  override val probabilityCol: String,
-  override val labelCol: String,
-  override val featuresCol: String
-) extends BinaryClassificationSummary {
 
-  @transient private val binaryMetrics = new BinaryClassificationMetrics(
-    predictions.select(col(probabilityCol), col(labelCol).cast(DoubleType)).rdd.map {
-      case Row(score: Vector, label: Double) => (score(0), label)
-    }, 100
-  )
 
-  lazy val areaUnderROC: Double = binaryMetrics.areaUnderROC()
-}
