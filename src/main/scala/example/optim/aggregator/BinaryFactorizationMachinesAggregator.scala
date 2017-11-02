@@ -29,7 +29,7 @@ class BinaryFactorizationMachinesAggregator(k: Int, n: Int)(bcCoefficients: Broa
     features.foreachActive { case (i, value) =>
         localGradientArray(i) += multiplier * value
         precomputed.foreachActive { case (f, pre) =>
-          localGradientArray(n + f + i * (n - 1)) += multiplier * value * (pre - v(f, i) * value)
+          localGradientArray(n * (1 + f) + i) += multiplier * value * (pre - v(f, i) * value)
         }
     }
     // Intercept
