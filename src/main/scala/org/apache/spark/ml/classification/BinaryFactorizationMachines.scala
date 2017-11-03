@@ -1,6 +1,6 @@
 package org.apache.spark.ml.classification
 
-import breeze.optimize.{CachedDiffFunction, LBFGS}
+import breeze.optimize.{CachedDiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
 import example.classification.BinaryClassificationSummary
 import example.feature.Point
@@ -24,7 +24,7 @@ trait HasK extends Params {
 
 trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
-  with HasK {
+  with HasRegParam with HasK {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -37,6 +37,9 @@ trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
 
   def setThreshold(value: Double): this.type = set(threshold, value)
   setDefault(threshold -> 0.5)
+
+  def setRegParam(value: Double): this.type = set(regParam, value)
+  setDefault(regParam -> 0.0)
 
   def setK(value: Int): this.type = set(k, value)
   setDefault(k -> 4)
@@ -58,7 +61,22 @@ class BinaryFactorizationMachines(override val uid: String)
     val numOfFeatures = points.first().features.size
     val numOfCoefficients = numOfFeatures + 1 + $(k) * numOfFeatures
 
-    val optimizer = new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
+    val regParamL1 = $(regParam)
+
+    val optimizer = if (regParamL1 == 0.0) {
+      new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
+    } else {
+      def regParamL1Fun = (index: Int) => {
+        val isIntercept = index == numOfCoefficients - 1
+        if (isIntercept) {
+          0.0
+        } else {
+          regParamL1
+        }
+      }
+      new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
+    }
+
     val costFun = new RDDLossFunction(points, new BinaryFactorizationMachinesAggregator($(k), numOfFeatures)(_), 0.0, $(aggregationDepth))
     val init = Vectors.dense(Array.fill(numOfCoefficients)(1E-6))
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
