@@ -24,7 +24,7 @@ trait HasK extends Params {
 
 trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
-  with HasRegParam with HasK {
+  with HasRegParam with HasElasticNetParam with HasK {
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -40,6 +40,9 @@ trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
 
   def setRegParam(value: Double): this.type = set(regParam, value)
   setDefault(regParam -> 0.0)
+
+  def setElasticNetParam(value: Double): this.type = set(elasticNetParam, value)
+  setDefault(elasticNetParam -> 0.0)
 
   def setK(value: Int): this.type = set(k, value)
   setDefault(k -> 4)
@@ -61,7 +64,8 @@ class BinaryFactorizationMachines(override val uid: String)
     val numOfFeatures = points.first().features.size
     val numOfCoefficients = numOfFeatures + 1 + $(k) * numOfFeatures
 
-    val regParamL1 = $(regParam)
+    val regParamL1 = $(elasticNetParam) * $(regParam)
+    val regParamL2 = (1.0 - $(elasticNetParam)) * $(regParam)
 
     val optimizer = if (regParamL1 == 0.0) {
       new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
@@ -77,7 +81,7 @@ class BinaryFactorizationMachines(override val uid: String)
       new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
     }
 
-    val costFun = new RDDLossFunction(points, new BinaryFactorizationMachinesAggregator($(k), numOfFeatures)(_), 0.0, $(aggregationDepth))
+    val costFun = new RDDLossFunction(points, new BinaryFactorizationMachinesAggregator($(k), numOfFeatures)(_), regParamL2, $(aggregationDepth))
     val init = Vectors.dense(Array.fill(numOfCoefficients)(1E-6))
     val states = optimizer.iterations(new CachedDiffFunction(costFun), new BDV(init.toArray))
     val arrayBuilder = mutable.ArrayBuilder.make[Double]
