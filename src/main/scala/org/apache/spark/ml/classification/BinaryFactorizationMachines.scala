@@ -113,13 +113,18 @@ class BinaryFactorizationMachinesModel(
 
   override def numClasses: Int = 2
 
-  override protected def predictRaw(features: Vector): Vector =
-    Vectors.dense(Array(BinaryFactorizationMachinesModel.predict(features, coefficients, intercept, v)))
+  override protected def predictRaw(features: Vector): Vector = {
+    val margin = BinaryFactorizationMachinesModel.predict(features, coefficients, intercept, v)
+    Vectors.dense(Array(-margin, margin))
+  }
 
-  override def copy(extra: ParamMap): BinaryFactorizationMachinesModel = defaultCopy(extra)
+  override def copy(extra: ParamMap): BinaryFactorizationMachinesModel = {
+    val newModel = copyValues(new BinaryFactorizationMachinesModel(uid, coefficients, intercept, v), extra)
+    newModel.setParent(parent)
+  }
 
   override protected def probability2prediction(probability: Vector): Double =
-    if (probability(0) > $(threshold)) 1 else 0
+    if (probability(1) > $(threshold)) 1 else 0
 
   protected override def raw2prediction(rawPrediction: Vector): Double =
     probability2prediction(raw2probability(rawPrediction))

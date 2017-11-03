@@ -15,7 +15,7 @@ class BinaryClassificationSummary(
 
   @transient private val binaryMetrics = new BinaryClassificationMetrics(
     predictions.select(col(probabilityCol), col(labelCol).cast(DoubleType)).rdd.map {
-      case Row(score: Vector, label: Double) => (score(0), label)
+      case Row(score: Vector, label: Double) => (score(1), label)
     }, 100
   )
 
