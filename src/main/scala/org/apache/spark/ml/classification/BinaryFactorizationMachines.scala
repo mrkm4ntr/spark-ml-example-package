@@ -26,7 +26,13 @@ trait HasK extends Params {
 
 trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
-  with HasRegParam with HasElasticNetParam with HasBalancedWeight with HasK {
+  with HasRegParam with HasElasticNetParam with HasBalancedWeight with HasK
+
+class BinaryFactorizationMachines(override val uid: String)
+  extends ProbabilisticClassifier[Vector, BinaryFactorizationMachines, BinaryFactorizationMachinesModel]
+  with BinaryFactorizationMachinesParams {
+
+  def this() = this(Identifiable.randomUID("binfm"))
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -51,13 +57,6 @@ trait BinaryFactorizationMachinesParams extends ProbabilisticClassifierParams
 
   def setK(value: Int): this.type = set(k, value)
   setDefault(k -> 4)
-}
-
-class BinaryFactorizationMachines(override val uid: String)
-  extends ProbabilisticClassifier[Vector, BinaryFactorizationMachines, BinaryFactorizationMachinesModel]
-  with BinaryFactorizationMachinesParams {
-
-  def this() = this(Identifiable.randomUID("binfm"))
 
   override def copy(extra: ParamMap): BinaryFactorizationMachines = defaultCopy(extra)
 

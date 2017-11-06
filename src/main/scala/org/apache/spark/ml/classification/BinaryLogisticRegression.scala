@@ -17,7 +17,12 @@ import scala.collection.mutable
 
 trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
   with HasMaxIter with HasTol with HasAggregationDepth with HasThreshold
-  with HasRegParam with HasElasticNetParam with HasBalancedWeight {
+  with HasRegParam with HasElasticNetParam with HasBalancedWeight
+
+class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
+  with BinaryLogisticRegressionParams {
+
+  def this() = this(Identifiable.randomUID("binlogreg"))
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
   setDefault(maxIter -> 10)
@@ -39,12 +44,6 @@ trait BinaryLogisticRegressionParams extends ProbabilisticClassifierParams
 
   def setBalancedWeight(value: Boolean): this.type  = set(balancedWeight, value)
   setDefault(balancedWeight -> true)
-}
-
-class BinaryLogisticRegression(override val uid: String) extends ProbabilisticClassifier[Vector, BinaryLogisticRegression, BinaryLogisticRegressionModel]
-  with BinaryLogisticRegressionParams {
-
-  def this() = this(Identifiable.randomUID("binlogreg"))
 
   override def copy(extra: ParamMap): BinaryLogisticRegression = defaultCopy(extra)
 
