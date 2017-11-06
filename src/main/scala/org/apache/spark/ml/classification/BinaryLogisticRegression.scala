@@ -6,6 +6,7 @@ import example.feature.Point
 import example.optim.aggregator.BinaryLogisticAggregator
 import example.optim.loss.RDDLossFunction
 import example.param.HasBalancedWeight
+import example.stat.BinaryClassSummarizer
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared._
@@ -92,32 +93,7 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
   }
 }
 
-class BinaryClassSummarizer extends Serializable {
-  private val distinctMap = new mutable.HashMap[Int, Long]
 
-  def add(label: Double): this.type = {
-    val counts = distinctMap.getOrElse(label.toInt, 0L)
-    distinctMap.put(label.toInt, counts + 1L)
-    this
-  }
-
-  def merge(other: BinaryClassSummarizer): BinaryClassSummarizer = {
-    val (largeMap, smallMap) = if (this.distinctMap.size > other.distinctMap.size) {
-      (this, other)
-    } else {
-      (other, this)
-    }
-    largeMap.distinctMap ++= smallMap.distinctMap
-    largeMap
-  }
-
-  def weights() = {
-    val numOfPos = distinctMap(1)
-    val numOfNeg = distinctMap(0)
-    val total = numOfPos + numOfNeg
-    (total / (2.0 * numOfPos), total / (2.0 * numOfNeg))
-  }
-}
 
 class BinaryLogisticRegressionModel(
   override val uid: String,

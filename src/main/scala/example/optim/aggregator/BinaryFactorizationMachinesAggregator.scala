@@ -5,7 +5,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.classification.BinaryFactorizationMachinesModel
 import org.apache.spark.ml.linalg.{Matrices, Vector, Vectors}
 
-class BinaryFactorizationMachinesAggregator(k: Int, n: Int)(bcCoefficients: Broadcast[Vector])
+class BinaryFactorizationMachinesAggregator(k: Int, n: Int, weights: (Double, Double))(bcCoefficients: Broadcast[Vector])
   extends DifferentiableLossAggregator[Point, BinaryFactorizationMachinesAggregator] {
 
   override protected val dim: Int = bcCoefficients.value.size
@@ -20,10 +20,10 @@ class BinaryFactorizationMachinesAggregator(k: Int, n: Int)(bcCoefficients: Broa
     (Vectors.dense(coefficients), Matrices.dense(k, n, v))
   }
 
-  private def binaryUpdateInPlace(features: Vector, label: Double): Unit = {
+  private def binaryUpdateInPlace(features: Vector, weight: Double, label: Double): Unit = {
     val localGradientArray = gradientSumArray
     val margin = -BinaryFactorizationMachinesModel.predict(features, coefficients, intercept, v)
-    val multiplier = 1.0 / (1.0 + math.exp(margin)) - label
+    val multiplier = weight * (1.0 / (1.0 + math.exp(margin)) - label)
 
     val precomputed = v.multiply(features) // f * 1
     features.foreachActive { case (i, value) =>
@@ -42,16 +42,17 @@ class BinaryFactorizationMachinesAggregator(k: Int, n: Int)(bcCoefficients: Broa
     }
 
     if (label > 0) {
-      lossSum += log1pExp(margin)
+      lossSum += weight * log1pExp(margin)
     } else {
-      lossSum += log1pExp(margin) - margin
+      lossSum += weight * (log1pExp(margin) - margin)
     }
   }
 
   override def add(point: Point): BinaryFactorizationMachinesAggregator = point match {
     case Point(label, features) =>
-      binaryUpdateInPlace(features, label)
-      weightSum += 1.0
+      val weight = if (label > 0) weights._1 else weights._2
+      binaryUpdateInPlace(features, weight, label)
+      weightSum += weight
       this
   }
 }
