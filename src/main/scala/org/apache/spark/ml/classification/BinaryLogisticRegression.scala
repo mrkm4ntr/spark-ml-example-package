@@ -1,4 +1,6 @@
 package org.apache.spark.ml.classification
+import java.util.Base64
+
 import breeze.optimize.{CachedDiffFunction, LBFGS, OWLQN}
 import breeze.linalg.{DenseVector => BDV}
 import example.classification.BinaryClassificationSummary
@@ -7,10 +9,11 @@ import example.optim.aggregator.BinaryLogisticAggregator
 import example.optim.loss.RDDLossFunction
 import example.param.HasBalancedWeight
 import example.stat.BinaryClassSummarizer
+import org.apache.spark.ml.attribute.{Attribute, AttributeGroup}
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param.shared._
-import org.apache.spark.ml.util.Identifiable
+import org.apache.spark.ml.util.{Identifiable, MLWritable, MLWriter}
 import org.apache.spark.sql.{Dataset, Row}
 
 import scala.collection.mutable
@@ -88,18 +91,19 @@ class BinaryLogisticRegression(override val uid: String) extends ProbabilisticCl
       arrayBuilder += state.adjustedValue
     }
     val allCoefficients = state.x.toArray.clone
-    new BinaryLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last)
+    val group = AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
+    new BinaryLogisticRegressionModel(uid, Vectors.dense(allCoefficients.init), allCoefficients.last, group.attributes)
   }
 }
-
-
 
 class BinaryLogisticRegressionModel(
   override val uid: String,
   val coefficients: Vector,
-  val intercept: Double
+  val intercept: Double,
+  val attributes: Option[Array[Attribute]],
+  var decodeColumnName: Boolean = false
 ) extends ProbabilisticClassificationModel[Vector, BinaryLogisticRegressionModel]
-  with BinaryLogisticRegressionParams {
+  with BinaryLogisticRegressionParams with MLWritable {
 
   override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector =
     Vectors.dense(rawPrediction.asInstanceOf[DenseVector].values.map(p => 1.0 / (1.0 + math.exp(-p))))
@@ -112,7 +116,7 @@ class BinaryLogisticRegressionModel(
   }
 
   override def copy(extra: ParamMap): BinaryLogisticRegressionModel = {
-    val newModel = copyValues(new BinaryLogisticRegressionModel(uid, coefficients, intercept), extra)
+    val newModel = copyValues(new BinaryLogisticRegressionModel(uid, coefficients, intercept, attributes, decodeColumnName), extra)
     newModel.setParent(parent)
   }
 
@@ -136,8 +140,50 @@ class BinaryLogisticRegressionModel(
     new BinaryClassificationSummary(summaryModel.transform(dataset),
       probabilityColName, $(labelCol), $(featuresCol))
   }
+
+  // TODO: handle exception
+  override def write: MLWriter = new BinaryLogisticRegressionModel.BinaryLogisticRegressionModelWriter(this, attributes.get, decodeColumnName)
 }
 
+object BinaryLogisticRegressionModel {
 
+  private case class LRModel(
+    negative_sampling_rate: Double,
+    bias: Double,
+    fields: Seq[LRField]
+  )
 
+  private case class LRField(
+    field: String,
+    weight: Option[Double],
+    values: Option[Seq[LRValue]]
+  )
 
+  private case class LRValue(
+    index: String,
+    weight: Double
+  )
+
+  private[BinaryLogisticRegressionModel] class BinaryLogisticRegressionModelWriter(
+    instance: BinaryLogisticRegressionModel,
+    attributes: Array[Attribute],
+    decodeColumnName: Boolean
+  ) extends MLWriter {
+
+    lazy val decoder = Base64.getDecoder
+
+    override protected def saveImpl(path: String): Unit = {
+      val params = attributes.zip(instance.coefficients.toArray)
+      val (numerics, binaries) = params.partition(_._1.attrType.name == "numeric")
+      val fields = numerics.map { case (attr, v) => LRField(attr.name.get, Some(v), None)} ++
+        binaries.map { case (attr, v) =>
+          val split = attr.name.get.split("_", 2)
+          (if (decodeColumnName) new String(decoder.decode(split(0))) else split(0), split(1), v)
+        }.groupBy(_._1).toList.map { case (k, vs) =>
+            LRField(k, None, Some(vs.map { case (_, index, v) => LRValue(index, v)}))
+        }
+      val lrModel = LRModel(1.0, instance.intercept, fields)
+      sparkSession.createDataFrame(Seq(lrModel)).repartition(1).write.json(path)
+    }
+  }
+}
